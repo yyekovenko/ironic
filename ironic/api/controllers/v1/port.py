@@ -44,6 +44,7 @@ class Port(base.APIBase):
     """
 
     _node_uuid = None
+    _portgroup_uuid = None
 
     def _get_node_uuid(self):
         return self._node_uuid
@@ -68,6 +69,26 @@ class Port(base.APIBase):
         elif value == wtypes.Unset:
             self._node_uuid = wtypes.Unset
 
+    def _get_portgroup_uuid(self):
+            return self._portgroup_uuid
+
+    def _set_portgroup_uuid(self, value):
+        if value and self._portgroup_uuid != value:
+            try:
+                portgroup = objects.Portgroup.get(pecan.request.context, value)
+                self._portgroup_uuid = portgroup.uuid
+                # NOTE(lucasagomes): Create the portgroup_id attribute
+                #                    on-the-fly to satisfy the api ->
+                #                    rpc object conversion.
+                self.portgroup_id = portgroup.id
+            except exception.PortgroupNotFound as e:
+                # Change error code because 404 (NotFound) is inappropriate
+                # response for a POST request to create a Port
+                e.code = http_client.BAD_REQUEST  # BadRequest
+                raise e
+        elif value == wtypes.Unset:
+            self._portgroup_uuid = wtypes.Unset
+
     uuid = types.uuid
     """Unique UUID for this port"""
 
@@ -81,6 +102,16 @@ class Port(base.APIBase):
                                 mandatory=True)
     """The UUID of the node this port belongs to"""
 
+    portgroup_uuid = wsme.wsproperty(types.uuid, _get_portgroup_uuid,
+                                     _set_portgroup_uuid, mandatory=False)
+    """The UUID of the portgroup this port belongs to"""
+
+    pxe_enabled = types.boolean
+    """Indicates whether pxe is enabled or disabled on the node."""
+
+    local_link_connection = types.locallinkconnectiontype
+    """The port binding profile for each portgroup"""
+
     links = wsme.wsattr([link.Link], readonly=True)
     """A list containing a self link and associated port links"""
 
@@ -90,6 +121,9 @@ class Port(base.APIBase):
         # NOTE(lucasagomes): node_uuid is not part of objects.Port.fields
         #                    because it's an API-only attribute
         fields.append('node_uuid')
+        # NOTE: portgroup_uuid is not part of objects.Port.fields
+        #                    because it's an API-only attribute
+        fields.append('portgroup_uuid')
         for field in fields:
             # Add fields we expose.
             if hasattr(self, field):
@@ -103,6 +137,14 @@ class Port(base.APIBase):
         self.fields.append('node_id')
         setattr(self, 'node_uuid', kwargs.get('node_id', wtypes.Unset))
 
+        # NOTE: portgroup_id is an attribute created on-the-fly
+        # by _set_portgroup_uuid(), it needs to be present in the fields so
+        # that as_dict() will contain portgroup_id field when converting it
+        # before saving it in the database.
+        self.fields.append('portgroup_id')
+        setattr(self, 'portgroup_uuid', kwargs.get('portgroup_id',
+                                                   wtypes.Unset))
+
     @staticmethod
     def _convert_with_links(port, url, fields=None):
         # NOTE(lucasagomes): Since we are able to return a specified set of
@@ -114,6 +156,9 @@ class Port(base.APIBase):
 
         # never expose the node_id attribute
         port.node_id = wtypes.Unset
+
+        # never expose the portgroup_id attribute
+        port.portgroup_id = wtypes.Unset
 
         port.links = [link.Link.make_link('self', url,
                                           'ports', port_uuid),
@@ -189,9 +234,9 @@ class PortsController(rest.RestController):
 
     invalid_sort_key_list = ['extra']
 
-    def _get_ports_collection(self, node_ident, address, marker, limit,
-                              sort_key, sort_dir, resource_url=None,
-                              fields=None):
+    def _get_ports_collection(self, node_ident, address, portgroup_ident,
+                              marker, limit, sort_key, sort_dir,
+                              resource_url=None, fields=None):
         if self.from_nodes and not node_ident:
             raise exception.MissingParameterValue(
                 _("Node identifier not specified."))
@@ -219,6 +264,17 @@ class PortsController(rest.RestController):
                                                  node.id, limit, marker_obj,
                                                  sort_key=sort_key,
                                                  sort_dir=sort_dir)
+        elif portgroup_ident:
+            # FIXME: Since all we need is the portgroup ID, we can
+            #                 make this more efficient by only querying
+            #                 for that column. This will get cleaned up
+            #                 as we move to the object interface.
+            portgroup = api_utils.get_rpc_portgroup(portgroup_ident)
+            ports = objects.Port.list_by_portgroup_id(pecan.request.context,
+                                                      portgroup.id, limit,
+                                                      marker_obj,
+                                                      sort_key=sort_key,
+                                                      sort_dir=sort_dir)
         elif address:
             ports = self._get_ports_by_address(address)
         else:
@@ -247,10 +303,11 @@ class PortsController(rest.RestController):
             return []
 
     @expose.expose(PortCollection, types.uuid_or_name, types.uuid,
-                   types.macaddress, types.uuid, int, wtypes.text,
-                   wtypes.text, types.listtype)
-    def get_all(self, node=None, node_uuid=None, address=None, marker=None,
-                limit=None, sort_key='id', sort_dir='asc', fields=None):
+                   types.macaddress, types.uuid_or_name, types.uuid, int,
+                   wtypes.text, wtypes.text, types.listtype)
+    def get_all(self, node=None, node_uuid=None, address=None, portgroup=None,
+                marker=None, limit=None, sort_key='id', sort_dir='asc',
+                fields=None):
         """Retrieve a list of ports.
 
         Note that the 'node_uuid' interface is deprecated in favour
@@ -262,6 +319,8 @@ class PortsController(rest.RestController):
                            node.
         :param address: MAC address of a port, to get the port which has
                         this MAC address.
+        :param portgroup: UUID or name of a portgroup, to get only ports
+                           for that portgroup.
         :param marker: pagination marker for large data sets.
         :param limit: maximum number of resources to return in a single result.
         :param sort_key: column to sort results by. Default: id.
@@ -281,15 +340,15 @@ class PortsController(rest.RestController):
                 not uuidutils.is_uuid_like(node)):
                 raise exception.NotAcceptable()
 
-        return self._get_ports_collection(node_uuid or node, address, marker,
-                                          limit, sort_key, sort_dir,
-                                          fields=fields)
+        return self._get_ports_collection(node_uuid or node, address,
+                                          portgroup, marker, limit, sort_key,
+                                          sort_dir, fields=fields)
 
     @expose.expose(PortCollection, types.uuid_or_name, types.uuid,
-                   types.macaddress, types.uuid, int, wtypes.text,
-                   wtypes.text)
-    def detail(self, node=None, node_uuid=None, address=None, marker=None,
-               limit=None, sort_key='id', sort_dir='asc'):
+                   types.macaddress, types.uuid_or_name, types.uuid, int,
+                   wtypes.text, wtypes.text)
+    def detail(self, node=None, node_uuid=None, address=None, portgroup=None,
+               marker=None, limit=None, sort_key='id', sort_dir='asc'):
         """Retrieve a list of ports with detail.
 
         Note that the 'node_uuid' interface is deprecated in favour
@@ -301,6 +360,8 @@ class PortsController(rest.RestController):
                           node.
         :param address: MAC address of a port, to get the port which has
                         this MAC address.
+        :param portgroup: UUID or name of a portgroup, to get only ports
+                           for that portgroup.
         :param marker: pagination marker for large data sets.
         :param limit: maximum number of resources to return in a single result.
         :param sort_key: column to sort results by. Default: id.
@@ -320,9 +381,9 @@ class PortsController(rest.RestController):
             raise exception.HTTPNotFound
 
         resource_url = '/'.join(['ports', 'detail'])
-        return self._get_ports_collection(node_uuid or node, address, marker,
-                                          limit, sort_key, sort_dir,
-                                          resource_url)
+        return self._get_ports_collection(node_uuid or node, address,
+                                          portgroup, marker, limit, sort_key,
+                                          sort_dir, resource_url)
 
     @expose.expose(Port, types.uuid, types.listtype)
     def get_one(self, port_uuid, fields=None):
@@ -375,6 +436,11 @@ class PortsController(rest.RestController):
             #    not present in the API object
             # 2) Add node_uuid
             port_dict['node_uuid'] = port_dict.pop('node_id', None)
+            # NOTE:
+            # 1) Remove portgroup_id because it's an internal value and
+            #    not present in the API object
+            # 2) Add portgroup_uuid
+            port_dict['portgroup_uuid'] = port_dict.pop('portgroup_id', None)
             port = Port(**api_utils.apply_jsonpatch(port_dict, patch))
         except api_utils.JSONPATCH_EXCEPTIONS as e:
             raise exception.PatchError(patch=patch, reason=e)
