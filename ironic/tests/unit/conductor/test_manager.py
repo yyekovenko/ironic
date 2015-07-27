@@ -2580,6 +2580,38 @@ class UpdatePortTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertEqual(new_address, res.address)
         self.assertFalse(mac_update_mock.called)
 
+    @mock.patch.object(task_manager, 'acquire', autospec=True)
+    def test_update_port_node_deleting_state(self, moc_acquire):
+        node = obj_utils.create_test_node(self.context, driver='fake',
+                                          provision_state=states.DELETING)
+
+        port = obj_utils.create_test_port(self.context,
+                                          node_id=node.id,
+                                          extra={'foo': 'bar'})
+
+        port.pxe_enabled = True
+
+        exc = self.assertRaises(messaging.rpc.ExpectedException,
+                                self.service.update_port,
+                                self.context, port)
+        self.assertEqual(exception.InvalidState, exc.exc_info[0])
+        moc_acquire.assert_called_once_with(self.context,
+                                            node.id,
+                                            purpose='port update')
+
+    def test_update_port_node_manageable_state(self):
+        node = obj_utils.create_test_node(self.context, driver='fake',
+                                          provision_state=states.MANAGEABLE)
+
+        port = obj_utils.create_test_port(self.context,
+                                          node_id=node.id,
+                                          extra={'foo': 'bar'})
+
+        port.pxe_enabled = True
+
+        res = self.service.update_port(self.context, port)
+        self.assertEqual(True, res.pxe_enabled)
+
     def test__filter_out_unsupported_types_all(self):
         self._start_service()
         CONF.set_override('send_sensor_data_types', ['All'], group='conductor')
@@ -2778,6 +2810,33 @@ class UpdatePortTestCase(mgr_utils.ServiceSetUpMixin,
         # Compare true exception hidden by @messaging.expected_exceptions
         self.assertEqual(exception.UnsupportedDriverExtension,
                          exc.exc_info[0])
+
+
+@mgr_utils.mock_record_keepalive
+class UpdatePortgroupTestCase(mgr_utils.ServiceSetUpMixin,
+                              tests_db_base.DbTestCase):
+    def test_update_portgroup(self):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+
+        portgroup = obj_utils.create_test_portgroup(self.context,
+                                                    node_id=node.id,
+                                                    extra={'foo': 'bar'})
+        new_extra = {'foo': 'baz'}
+        portgroup.extra = new_extra
+        res = self.service.update_portgroup(self.context, portgroup)
+        self.assertEqual(new_extra, res.extra)
+
+    def test_update_portgroup_node_locked(self):
+        node = obj_utils.create_test_node(self.context, driver='fake',
+                                          reservation='fake-reserv')
+
+        portgroup = obj_utils.create_test_port(self.context, node_id=node.id)
+        portgroup.extra = {'foo': 'baz'}
+        exc = self.assertRaises(messaging.rpc.ExpectedException,
+                                self.service.update_portgroup,
+                                self.context, portgroup)
+        # Compare true exception hidden by @messaging.expected_exceptions
+        self.assertEqual(exception.NodeLocked, exc.exc_info[0])
 
 
 @mgr_utils.mock_record_keepalive
@@ -4280,6 +4339,30 @@ class DestroyPortTestCase(mgr_utils.ServiceSetUpMixin,
         exc = self.assertRaises(messaging.rpc.ExpectedException,
                                 self.service.destroy_port,
                                 self.context, port)
+        # Compare true exception hidden by @messaging.expected_exceptions
+        self.assertEqual(exception.NodeLocked, exc.exc_info[0])
+
+
+@mgr_utils.mock_record_keepalive
+class DestroyPortgroupTestCase(mgr_utils.ServiceSetUpMixin,
+                               tests_db_base.DbTestCase):
+    def test_destroy_portgroup(self):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+
+        portgroup = obj_utils.create_test_portgroup(self.context,
+                                                    node_id=node.id)
+        self.service.destroy_portgroup(self.context, portgroup)
+        self.assertRaises(exception.PortgroupNotFound, portgroup.refresh)
+
+    def test_destroy_portgroup_node_locked(self):
+        node = obj_utils.create_test_node(self.context, driver='fake',
+                                          reservation='fake-reserv')
+
+        portgroup = obj_utils.create_test_portgroup(self.context,
+                                                    node_id=node.id)
+        exc = self.assertRaises(messaging.rpc.ExpectedException,
+                                self.service.destroy_portgroup,
+                                self.context, portgroup)
         # Compare true exception hidden by @messaging.expected_exceptions
         self.assertEqual(exception.NodeLocked, exc.exc_info[0])
 
