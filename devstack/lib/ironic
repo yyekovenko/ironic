@@ -152,6 +152,11 @@ DISK_IMAGE_BUILDER_OPTS=${DISK_IMAGE_BUILDER_OPTS:-'baremetal ubuntu vm'}
 # Example DIB_RELEASE=trusty
 DIB_VARS=${DIB_VARS:-''}
 
+# This flag is used to allow adding Link-Local-Connection info
+# to ironic port-create command. LLC info is obtained from
+# IRONIC_{VM,HW}_NODES_FILE
+IRONIC_USE_LINK_LOCAL=$(trueorfalse False IRONIC_USE_LINK_LOCAL)
+
 # get_pxe_boot_file() - Get the PXE/iPXE boot file path
 function get_pxe_boot_file {
     local relpath=syslinux/pxelinux.0
@@ -722,6 +727,21 @@ function enroll_nodes {
                 -i ipmi_username=${ipmi_username}"
         fi
 
+        # Local-link-connection options
+        if [[ "${IRONIC_USE_LINK_LOCAL}" == "True" ]]; then
+            local llc_opts=""
+            local switch_id
+            local switch_info
+            local port_id
+
+            switch_id=$(iniget $ironic_nodes_file $node_name switch_id)
+            switch_info=$(iniget $ironic_nodes_file $node_name switch_info)
+            port_id=$(iniget $ironic_nodes_file $node_name port_id)
+
+            llc_opts="-l switch_id=${switch_id} -l switch_info=${switch_info} -l port_id=${port_id}"
+        fi
+
+
         # First node created will be used for testing in ironic w/o glance
         # scenario, so we need to know its UUID.
         local standalone_node_uuid=""
@@ -741,7 +761,7 @@ function enroll_nodes {
             $node_options \
             | grep -w "uuid" | get_field 2)
 
-        ironic port-create --address $mac_address --node $node_id
+        ironic port-create --address $mac_address --node $node_id $llc_opts
 
         # Find minimum flavor
         local adjusted_disk
