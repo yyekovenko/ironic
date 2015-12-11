@@ -138,6 +138,18 @@ IRONIC_DEPLOY_DRIVER_ISCSI_WITH_IPA=$(trueorfalse False IRONIC_DEPLOY_DRIVER_ISC
 # The path to the libvirt hooks directory, used if IRONIC_VM_LOG_ROTATE is True
 IRONIC_LIBVIRT_HOOKS_PATH=${IRONIC_LIBVIRT_HOOKS_PATH:-/etc/libvirt/hooks/}
 
+# This flag is uses to build user image with disk-image-builder
+# disk-image-builder options can be set via DISK_IMAGE_BUILDER_OPTS
+IRONIC_BUILD_USER_IMAGE=$(trueorfalse False IRONIC_BUILD_USER_IMAGE)
+
+# Space separated list of options that will be passed to DIB command.
+# Image will be uploaded to glance with ir-user-$IRONIC_DEPLOY_DRIVER name.
+DISK_IMAGE_BUILDER_OPTS=${DISK_IMAGE_BUILDER_OPTS:-'baremetal ubuntu vm'}
+
+# Space separated list of variables that will be passed to DIB.
+# Example DIB_RELEASE=trusty
+DIB_VARS=${DIB_VARS:-''}
+
 # get_pxe_boot_file() - Get the PXE/iPXE boot file path
 function get_pxe_boot_file {
     local relpath=syslinux/pxelinux.0
@@ -851,6 +863,20 @@ function upload_baremetal_ironic_deploy {
         --public --disk-format=ari \
         --container-format=ari \
         < $IRONIC_DEPLOY_RAMDISK_PATH  | grep ' id ' | get_field 2)
+
+    if is_ironic_hardware && [[ "$IRONIC_BUILD_USER_IMAGE" == "True" ]]; then
+        pip_install_gr "diskimage-builder"
+        for var in $DIB_VARS; do
+            export $var
+        done
+        disk-image-create -o $TOP_DIR/ir-user-$IRONIC_DEPLOY_DRIVER  $DISK_IMAGE_BUILDER_OPTS
+
+        openstack --os-token $token --os-url http://$GLANCE_HOSTPORT image create \
+            ir-user-$IRONIC_DEPLOY_DRIVER \
+            --public --disk-format=qcow2 \
+            --container-format=bare \
+            --file $TOP_DIR/ir-user-${IRONIC_DEPLOY_DRIVER}.qcow2
+    fi
 }
 
 function prepare_baremetal_basic_ops {
