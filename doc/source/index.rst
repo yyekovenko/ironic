@@ -69,6 +69,7 @@ Introduction
 .. toctree::
   dev/dev-quickstart
   dev/vendor-passthru
+  dev/ironic-neutron-integration
 
 .. toctree::
   :maxdepth: 1
