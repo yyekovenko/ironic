@@ -41,7 +41,17 @@ def handle_errors(f):
 class BaremetalClient(rest_client.RestClient):
     """Base Tempest REST client for Ironic API."""
 
+    api_microversion = None
     uri_prefix = ''
+
+    def get_headers(self):
+        headers = super(BaremetalClient, self).get_headers()
+        if self.api_microversion:
+            headers['x-openstack-ironic-api-version'] = self.api_microversion
+        return headers
+
+    def set_api_microversion(self, microversion):
+        self.api_microversion = microversion
 
     def serialize(self, object_dict):
         """Serialize an Ironic object."""

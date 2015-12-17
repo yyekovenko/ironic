@@ -16,6 +16,7 @@ from oslo_utils import timeutils
 from tempest import test
 from tempest_lib import exceptions
 
+from ironic.api.controllers.v1 import versions
 from ironic_tempest_plugin.tests.api.admin import base
 
 
@@ -42,6 +43,18 @@ class TestNodeStates(base.BaseBaremetalTest):
                    'the required time: %s sec.' % self.power_timeout)
         raise exceptions.TimeoutException(message)
 
+    def _validate_provision_state(self, node_uuid, target_state):
+        # Validate that provision state is set within timeout
+        start = timeutils.utcnow()
+        while timeutils.delta_seconds(
+                start, timeutils.utcnow()) < self.unprovision_timeout:
+            _, node = self.client.show_node(node_uuid)
+            if node['provision_state'] == target_state:
+                return
+        message = ('Failed to set provision state within '
+                   'the required time: %s sec.' % self.unprovision_timeout)
+        raise exceptions.TimeoutException(message)
+
     @test.idempotent_id('cd8afa5e-3f57-4e43-8185-beb83d3c9015')
     def test_list_nodestates(self):
         _, nodestates = self.client.list_nodestates(self.node['uuid'])
@@ -57,3 +70,114 @@ class TestNodeStates(base.BaseBaremetalTest):
             self.client.set_node_power_state(node['uuid'], state)
             # Check power state after state is set
             self._validate_power_state(node['uuid'], state)
+
+    @test.idempotent_id('ccb8fca9-2ba0-480c-a037-34c3bd09dc74')
+    def test_set_node_provision_state(self):
+        _, node = self.create_node(self.chassis['uuid'])
+        # Nodes appear in NONE state by default until v1.1
+        self.assertEqual(None, node['provision_state'])
+        provision_states_list = ['active', 'deleted']
+        target_states_list = ['active', None]
+        for (provision_state, target_state) in zip(provision_states_list,
+                                                   target_states_list):
+            self.client.set_node_provision_state(node['uuid'], provision_state)
+            self._validate_provision_state(node['uuid'], target_state)
+
+
+class TestNodeStatesV1_2(TestNodeStates):
+    min_microversion = '{}.{}'.format(versions.BASE_VERSION,
+                                      versions.MINOR_2_AVAILABLE_STATE)
+    max_microversion = '{}.{}'.format(versions.BASE_VERSION,
+                                      versions.MINOR_3_DRIVER_INTERNAL_INFO)
+
+    @test.idempotent_id('9c414984-f3b6-4b3d-81da-93b60d4662fb')
+    def test_set_node_provision_state(self):
+        _, node = self.create_node(self.chassis['uuid'])
+        # Nodes appear in AVAILABLE state by default from v1.2 to v1.10
+        self.assertEqual('available', node['provision_state'])
+        provision_states_list = ['active', 'deleted']
+        target_states_list = ['active', 'available']
+        for (provision_state, target_state) in zip(provision_states_list,
+                                                   target_states_list):
+            self.client.set_node_provision_state(node['uuid'], provision_state)
+            self._validate_provision_state(node['uuid'], target_state)
+
+
+class TestNodeStatesV1_4(TestNodeStatesV1_2):
+    min_microversion = '{}.{}'.format(versions.BASE_VERSION,
+                                      versions.MINOR_4_MANAGEABLE_STATE)
+    max_microversion = '{}.{}'.format(versions.BASE_VERSION,
+                                      versions.MINOR_5_NODE_NAME)
+
+    @test.idempotent_id('3d606003-05ce-4b5a-964d-bdee382fafe9')
+    def test_set_node_provision_state(self):
+        _, node = self.create_node(self.chassis['uuid'])
+        # Nodes appear in AVAILABLE state by default from v1.2 to v1.10
+        self.assertEqual('available', node['provision_state'])
+        # MANAGEABLE state and PROVIDE transition have been added in v1.4
+        provision_states_list = [
+            'manage', 'provide', 'active', 'deleted']
+        target_states_list = [
+            'manageable', 'available', 'active', 'available']
+        for (provision_state, target_state) in zip(provision_states_list,
+                                                   target_states_list):
+            self.client.set_node_provision_state(node['uuid'], provision_state)
+            self._validate_provision_state(node['uuid'], target_state)
+
+
+class TestNodeStatesV1_6(TestNodeStatesV1_4):
+    min_microversion = '{}.{}'.format(versions.BASE_VERSION,
+                                      versions.MINOR_6_INSPECT_STATE)
+    max_microversion = '{}.{}'.format(versions.BASE_VERSION,
+                                      versions.MINOR_10_UNRESTRICTED_NODE_NAME)
+
+    @test.idempotent_id('6c9ce4a3-713b-4c76-91af-18c48d01f1bb')
+    def test_set_node_provision_state(self):
+        _, node = self.create_node(self.chassis['uuid'])
+        # Nodes appear in AVAILABLE state by default from v1.2 to v1.10
+        self.assertEqual('available', node['provision_state'])
+        # INSPECT* states have been added in v1.6
+        provision_states_list = [
+            'manage', 'inspect', 'provide', 'active', 'deleted']
+        target_states_list = [
+            'manageable', 'manageable', 'available', 'active', 'available']
+        for (provision_state, target_state) in zip(provision_states_list,
+                                                   target_states_list):
+            self.client.set_node_provision_state(node['uuid'], provision_state)
+            self._validate_provision_state(node['uuid'], target_state)
+
+
+class TestNodeStatesV1_11(TestNodeStatesV1_6):
+    min_microversion = '{}.{}'.format(versions.BASE_VERSION,
+                                      versions.MINOR_11_ENROLL_STATE)
+    max_microversion = '{}.{}'.format(versions.BASE_VERSION,
+                                      versions.MINOR_11_ENROLL_STATE)
+
+    @test.idempotent_id('31f53828-b83d-40c7-98e5-843e28a1b6b9')
+    def test_set_node_provision_state(self):
+        _, node = self.create_node(self.chassis['uuid'])
+        # Nodes appear in ENROLL state by default from v1.11
+        self.assertEqual('enroll', node['provision_state'])
+        provision_states_list = [
+            'manage', 'inspect', 'provide', 'active', 'deleted']
+        target_states_list = [
+            'manageable', 'manageable', 'available', 'active', 'available']
+        for (provision_state, target_state) in zip(provision_states_list,
+                                                   target_states_list):
+            self.client.set_node_provision_state(node['uuid'], provision_state)
+            self._validate_provision_state(node['uuid'], target_state)
+
+
+class TestNodeStatesV1_12(TestNodeStatesV1_11):
+    min_microversion = '{}.{}'.format(versions.BASE_VERSION,
+                                      versions.MINOR_12_RAID_CONFIG)
+    max_microversion = 'latest'
+
+    @test.idempotent_id('4427b1ca-8e79-4139-83d6-77dfac03e61e')
+    def test_set_node_raid_config(self):
+        _, node = self.create_node(self.chassis['uuid'])
+        target_raid_config = {'logical_disks': [{'size_gb': 100,
+                                                 'raid_level': '1'}]}
+        self.client.set_node_raid_config(node['uuid'], target_raid_config)
+        _, ret = self.client.show_node(node['uuid'])
+        self.assertEqual(target_raid_config, ret['target_raid_config'])
