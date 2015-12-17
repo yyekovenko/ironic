@@ -11,7 +11,11 @@
 #    under the License.
 
 import functools
+import inspect
 
+from tempest.common import api_version_utils
+from tempest.common import credentials_factory as common_creds
+from tempest.common import dynamic_creds
 from tempest import config
 from tempest import test
 from tempest_lib.common.utils import data_utils
@@ -50,7 +54,8 @@ def creates(resource):
     return decorator
 
 
-class BaseBaremetalTest(test.BaseTestCase):
+class BaseBaremetalTest(api_version_utils.BaseMicroversionTest,
+                        test.BaseTestCase):
     """Base class for Baremetal API tests."""
 
     credentials = ['admin']
@@ -68,11 +73,71 @@ class BaseBaremetalTest(test.BaseTestCase):
                         (cls.__name__, CONF.baremetal.driver))
             raise cls.skipException(skip_msg)
 
+        cfg_min_version = CONF.baremetal.min_microversion
+        cfg_max_version = CONF.baremetal.max_microversion
+        api_version_utils.check_skip_with_microversion(cls.min_microversion,
+                                                       cls.max_microversion,
+                                                       cfg_min_version,
+                                                       cfg_max_version)
+
+    @classmethod
+    def get_client_with_isolated_creds(cls,
+                                       name=None,
+                                       type_of_creds="admin",
+                                       api_microversions=None):
+        """Creates isolated creds.
+
+        :param name: name, will be used for naming ic and related stuff
+        :param type_of_creds: admin, alt or primary
+        :param cleanup_in_class: defines place where to delete
+        :returns: SharesClient -- shares client with isolated creds.
+        :returns: To client added dict attr 'creds' with
+        :returns: key elements 'tenant' and 'user'.
+        """
+
+        if name is None:
+            # Get name of test method
+            name = inspect.stack()[1][3]
+            if len(name) > 32:
+                name = name[0:32]
+
+        # Choose type of isolated creds
+        ic = dynamic_creds.DynamicCredentialProvider(
+            identity_version=CONF.identity.auth_version,
+            name=name,
+            admin_role=CONF.identity.admin_role,
+            admin_creds=common_creds.get_configured_credentials(
+                'identity_admin'))
+        if "admin" in type_of_creds:
+            creds = ic.get_admin_creds()
+        elif "alt" in type_of_creds:
+            creds = ic.get_alt_creds()
+        else:
+            creds = ic.self.get_credentials(type_of_creds)
+        ic.type_of_creds = type_of_creds
+
+        # create client with isolated creds
+        os = clients.Manager(credentials=creds,
+                             api_microversions=api_microversions)
+        client = os.baremetal_client
+
+        return client
+
+    @classmethod
+    def setup_credentials(cls):
+        cls.request_microversion = (
+            api_version_utils.select_request_microversion(
+                cls.min_microversion,
+                CONF.baremetal.min_microversion))
+        cls.services_microversion = {
+            CONF.baremetal.catalog_type: cls.request_microversion}
+        super(BaseBaremetalTest, cls).setup_credentials()
+
     @classmethod
     def setup_clients(cls):
         super(BaseBaremetalTest, cls).setup_clients()
-        cls.admin = clients.AdminManager()
-        cls.client = cls.os_admin.baremetal_client
+        cls.client = cls.get_client_with_isolated_creds(
+            type_of_creds='admin', api_microversions=cls.services_microversion)
 
     @classmethod
     def resource_setup(cls):
@@ -80,6 +145,7 @@ class BaseBaremetalTest(test.BaseTestCase):
 
         cls.driver = CONF.baremetal.driver
         cls.power_timeout = CONF.baremetal.power_timeout
+        cls.unprovision_timeout = CONF.baremetal.unprovision_timeout
         cls.created_objects = {}
         for resource in RESOURCE_TYPES:
             cls.created_objects[resource] = set()

@@ -44,6 +44,22 @@ BaremetalGroup = [
                         'publicURL', 'adminURL', 'internalURL'],
                help="The endpoint type to use for the baremetal provisioning "
                     "service"),
+    cfg.StrOpt('min_microversion',
+               default=None,
+               help="Lower version of the test target microversion range. "
+                    "The format is 'X.Y', where 'X' and 'Y' are int values. "
+                    "Tempest selects tests based on the range between "
+                    "min_microversion and max_microversion. "
+                    "If both values are None, Tempest avoids tests which "
+                    "require a microversion."),
+    cfg.StrOpt('max_microversion',
+               default='latest',
+               help="Upper version of the test target microversion range. "
+                    "The format is 'X.Y', where 'X' and 'Y' are int values. "
+                    "Tempest selects tests based on the range between "
+                    "min_microversion and max_microversion. "
+                    "If both values are None, Tempest avoids tests which "
+                    "require a microversion."),
     cfg.IntOpt('active_timeout',
                default=300,
                help="Timeout for Ironic node to completely provision"),
