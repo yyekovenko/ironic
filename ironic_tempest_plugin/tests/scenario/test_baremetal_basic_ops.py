@@ -110,7 +110,7 @@ class BaremetalBasicOps(manager_baremetal.BaremetalScenarioTest):
     @test.services('baremetal', 'compute', 'image', 'network')
     def test_baremetal_server_ops(self):
         self.add_keypair()
-        self.boot_instance()
+        self.instance, self.node = self.boot_instance()
         self.validate_ports()
         self.verify_connectivity()
         if CONF.validation.connect_method == 'floating':
